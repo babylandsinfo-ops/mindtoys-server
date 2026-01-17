@@ -8,14 +8,30 @@ const PORT = process.env.PORT || 5000;
 
 // ================= 🔥 FIXED MIDDLEWARE (CORS) ================= //
 // আমরা এখানে বলে দিচ্ছি: "সব ধরনের রিকোয়েস্ট অ্যালাও করো"
+// 🔥 CORS CONFIGURATION (Bulletproof Fix)
+// আমরা নির্দিষ্ট করে বলে দিচ্ছি কোন কোন ডোমেইন এলাউড
+const allowedOrigins = [
+    'http://localhost:5173', // আপনার লোকাল কম্পিউটার
+    'https://maroon-alligator-397620.hostingersite.com' // 👈 আপনার লাইভ সাইট
+];
+
 app.use(cors({
-    origin: '*', // সব ডোমেইন থেকে এক্সেস পাবে (Dev এর জন্য সেরা)
+    origin: function (origin, callback) {
+        // (!origin) মানে হলো যদি সার্ভার নিজেই নিজেকে কল করে (যেমন Postman বা Server to Server)
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            console.log("🚫 Blocked by CORS:", origin); // কনসোলে দেখাবে কে ব্লক হলো
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
 }));
 
 app.use(express.json());
+
 
 // ================= DATABASE CONNECTION ================= //
 mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/mindtoys')
