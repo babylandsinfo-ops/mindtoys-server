@@ -3,7 +3,8 @@ const mongoose = require('mongoose');
 const productSchema = new mongoose.Schema({
   name: {
     type: String,
-    required: true // নাম থাকতেই হবে
+    required: true,
+    trim: true
   },
   price: {
     type: Number,
@@ -11,25 +12,33 @@ const productSchema = new mongoose.Schema({
   },
   description: {
     type: String,
-    required: true
+    required: false // ডেসক্রিপশন না থাকলেও যেন সমস্যা না করে
   },
   image: {
-    type: String, // এখানে ছবির লিংক থাকবে (Cloudinary)
+    type: String,
     required: true
   },
   category: {
     type: String,
     required: true,
-    enum: ['kids', 'special_needs', 'educational'] // শুধু এই ৩ ধরনের ক্যাটাগরি হবে
+    index: true // 🚀 স্পিডের জন্য এটা থাকতেই হবে
+    // ❌ enum লাইনটি সম্পূর্ণ বাদ দেওয়া হয়েছে
+  },
+  qty: { 
+    type: Number, 
+    default: 20 
   },
   inStock: {
     type: Boolean,
     default: true
   }
 }, {
-  timestamps: true // অটোমেটিক তৈরি এবং আপডেটের সময় সেভ হবে
+  timestamps: true 
 });
 
-const Product = mongoose.model('Product', productSchema);
+// সার্চ ইনডেক্স
+productSchema.index({ name: 'text' }); 
 
+// মডেল এক্সপোর্ট
+const Product = mongoose.models.Product || mongoose.model('Product', productSchema);
 module.exports = Product;
