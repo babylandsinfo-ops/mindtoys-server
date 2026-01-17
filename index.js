@@ -179,7 +179,18 @@ app.put('/api/orders/:id/importer-info', async (req, res) => {
         res.status(500).json({ message: "Ledger Update Failed" });
     }
 });
+// server/index.js - এর ভেতরে বসান
 
+// 🔥 ১.৫ নির্দিষ্ট একটি প্রোডাক্ট দেখা (GET Single Product) - এই অংশটি মিসিং ছিল
+app.get('/api/products/:id', async (req, res) => {
+    try {
+        const product = await Product.findById(req.params.id);
+        if (!product) return res.status(404).json({ message: "Product not found" });
+        res.json(product);
+    } catch (err) {
+        res.status(500).json({ message: "Server Error" });
+    }
+});
 // ================= SERVER START ================= //
 
 app.get('/', (req, res) => {
