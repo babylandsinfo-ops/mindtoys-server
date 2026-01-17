@@ -6,8 +6,15 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// ================= MIDDLEWARE ================= //
-app.use(cors());
+// ================= 🔥 FIXED MIDDLEWARE (CORS) ================= //
+// আমরা এখানে বলে দিচ্ছি: "সব ধরনের রিকোয়েস্ট অ্যালাও করো"
+app.use(cors({
+    origin: '*', // সব ডোমেইন থেকে এক্সেস পাবে (Dev এর জন্য সেরা)
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
+}));
+
 app.use(express.json());
 
 // ================= DATABASE CONNECTION ================= //
@@ -26,17 +33,15 @@ const productSchema = new mongoose.Schema({
     image: String,
     sourceUrl: String,
     qty: Number,
-    skills: [String],      // Skills array (Optional)
-    ageRange: String,      // Age range (Optional)
+    skills: [String],
+    ageRange: String,
     date: { type: Date, default: Date.now }
 }, { strict: false });
 
-// Model definition with explicit collection name 'products'
 const Product = mongoose.model('Product', productSchema, 'products');
 
 // 🛒 2. Order Schema
 const orderSchema = new mongoose.Schema({
-    // Customer Info
     name: String, 
     phone: String,
     address: String,
@@ -45,22 +50,16 @@ const orderSchema = new mongoose.Schema({
         phone: String,
         address: String
     },
-
-    // Cart Items
     items: Array,
     cartItems: Array,
     cart: Array,
-
-    // Payment & Status
     totalAmount: Number,
     total: Number,
     status: { type: String, default: 'Pending' },
-    orderDate: { type: Date, default: Date.now },
-    date: { type: Date, default: Date.now },
-
-    // Importer Ledger (Profit Tracking)
     buyingPrice: { type: Number, default: 0 },
-    isImporterPaid: { type: Boolean, default: false }
+    isImporterPaid: { type: Boolean, default: false },
+    orderDate: { type: Date, default: Date.now },
+    date: { type: Date, default: Date.now }
 }, { strict: false });
 
 const Order = mongoose.model('Order', orderSchema);
@@ -68,33 +67,40 @@ const Order = mongoose.model('Order', orderSchema);
 
 // ================= ROUTES ================= //
 
-// ---------------- PRODUCT ROUTES ---------------- //
-
-// ১. সব প্রোডাক্ট দেখা (Pagination & Filter সহ - সুপারফাস্ট) 🚀
+// ১. সব প্রোডাক্ট দেখা (Pagination & Filter সহ) 🚀
 app.get('/api/products', async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 20; 
-        const category = req.query.category;
+        
+        // 🛠️ FIX: Trim ব্যবহার করা (যাতে 'Toys ' সমস্যা না হয়)
+        const category = req.query.category ? req.query.category.trim() : '';
+        const search = req.query.search ? req.query.search.trim() : '';
 
         let query = {};
+
+        // ক্যাটাগরি ফিল্টার
         if (category && category !== 'All') {
             query.category = category;
         }
 
+        // সার্চ ফিল্টার (Regex - Case Insensitive)
+        if (search) {
+            query.name = { $regex: search, $options: 'i' };
+        }
+
         const products = await Product.find(query)
-            .limit(limit * 1)
+            .sort({ _id: -1 }) // লেটেস্ট প্রোডাক্ট আগে
             .skip((page - 1) * limit)
-            .sort({ createdAt: -1 }) // নতুন প্রোডাক্ট আগে
-            .exec();
+            .limit(limit);
 
         const count = await Product.countDocuments(query);
 
         res.json({
-            products,
+            products, // Array of products
+            totalProducts: count,
             totalPages: Math.ceil(count / limit),
-            currentPage: page,
-            totalProducts: count
+            currentPage: page
         });
 
     } catch (err) {
@@ -103,12 +109,21 @@ app.get('/api/products', async (req, res) => {
     }
 });
 
-// ২. নির্দিষ্ট একটি প্রোডাক্ট দেখা (Single Product Details) 🔍
+// ২. নির্দিষ্ট একটি প্রোডাক্ট দেখা (Single Product) 🔍
+// 🔥 FIX: রিলেটেড প্রোডাক্ট সহ পাঠানো (Speed Optimization)
 app.get('/api/products/:id', async (req, res) => {
     try {
         const product = await Product.findById(req.params.id);
         if (!product) return res.status(404).json({ message: "Product not found" });
-        res.json(product);
+
+        // রিলেটেড প্রোডাক্ট খোঁজা (একই ক্যাটাগরির ৪টি)
+        const relatedProducts = await Product.find({
+            category: product.category,
+            _id: { $ne: product._id }
+        }).limit(4);
+
+        res.json({ product, relatedProducts });
+        
     } catch (err) {
         res.status(500).json({ message: "Server Error" });
     }
@@ -125,13 +140,11 @@ app.post('/api/products', async (req, res) => {
     }
 });
 
-// ৪. প্রোডাক্ট আপডেট/এডিট করা (PUT)
+// ৪. প্রোডাক্ট আপডেট (PUT)
 app.put('/api/products/:id', async (req, res) => {
     try {
         const updatedProduct = await Product.findByIdAndUpdate(
-            req.params.id, 
-            req.body, 
-            { new: true }
+            req.params.id, req.body, { new: true }
         );
         res.json(updatedProduct);
     } catch (err) {
@@ -139,7 +152,7 @@ app.put('/api/products/:id', async (req, res) => {
     }
 });
 
-// ৫. প্রোডাক্ট ডিলিট করা (DELETE)
+// ৫. প্রোডাক্ট ডিলিট (DELETE)
 app.delete('/api/products/:id', async (req, res) => {
     try {
         await Product.findByIdAndDelete(req.params.id);
@@ -152,7 +165,7 @@ app.delete('/api/products/:id', async (req, res) => {
 
 // ---------------- ORDER ROUTES ---------------- //
 
-// ৬. নতুন অর্ডার প্লেস করা (POST)
+// ৬. অর্ডার প্লেস করা (POST)
 app.post('/api/orders', async (req, res) => {
     try {
         const newOrder = new Order(req.body);
@@ -173,41 +186,16 @@ app.get('/api/orders', async (req, res) => {
     }
 });
 
-// ৮. অর্ডার স্ট্যাটাস আপডেট করা (PUT)
+// ৮. অর্ডার স্ট্যাটাস আপডেট (PUT)
 app.put('/api/orders/:id/status', async (req, res) => {
     try {
         const { status } = req.body;
         const updatedOrder = await Order.findByIdAndUpdate(
-            req.params.id,
-            { status: status },
-            { new: true }
+            req.params.id, { status: status }, { new: true }
         );
         res.json(updatedOrder);
     } catch (err) {
         res.status(500).json({ message: "Status Update Failed" });
-    }
-});
-
-// ৯. ইম্পোর্টার লেজার আপডেট করা (PUT)
-app.put('/api/orders/:id/importer-info', async (req, res) => {
-    try {
-        const { buyingPrice, isImporterPaid } = req.body;
-        const updateData = {};
-        
-        if (buyingPrice !== undefined) updateData.buyingPrice = Number(buyingPrice);
-        if (isImporterPaid !== undefined) updateData.isImporterPaid = isImporterPaid;
-
-        const updatedOrder = await Order.findByIdAndUpdate(
-            req.params.id,
-            updateData,
-            { new: true }
-        );
-        
-        if (!updatedOrder) return res.status(404).json({ message: "Order not found" });
-        res.json(updatedOrder);
-    } catch (err) {
-        console.error("Ledger Error:", err);
-        res.status(500).json({ message: "Ledger Update Failed" });
     }
 });
 
