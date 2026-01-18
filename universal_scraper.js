@@ -2,157 +2,144 @@ const mongoose = require('mongoose');
 const puppeteer = require('puppeteer');
 require('dotenv').config();
 
-// ১. ডাটাবেস স্কিমা (Filter এর জন্য প্রস্তুত)
+// ১. ডাটাবেস কানেকশন
+mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/mindtoys')
+    .then(() => console.log("✅ MongoDB Connected..."))
+    .catch(err => console.error("❌ DB Connection Error:", err));
+
 const productSchema = new mongoose.Schema({
     name: String,
     price: Number,
+    category: String,
     description: String,
-    category: String,      // যেমন: Toys, Baby Care
-    subcategory: String,   // যেমন: Puzzle, Walker (URL থেকে বের করব)
     image: String,
+    qty: Number,
     sourceUrl: String,
-    qty: { type: Number, default: 20 }
+    createdAt: { type: Date, default: Date.now }
 });
 
-const Product = mongoose.model('Product', productSchema);
+const Product = mongoose.model('Product', productSchema, 'products');
 
-// ২. ডাটাবেস কানেকশন
-mongoose.connect(process.env.MONGO_URI)
-    .then(() => console.log("✅ MongoDB Connected..."))
-    .catch(err => console.log(err));
-
-// ৩. ক্যাটাগরি ম্যাপ (যেই লিংকগুলো থেকে ডাটা আনব)
-// বাম পাশে আমাদের সাইটের নাম, ডান পাশে সোর্স লিংক
-const CATEGORIES_TO_SCRAPE = [
-    {
-        name: "Toys & Gaming",
-        url: "https://babybazarbd.com/product-category/toys/"
-    },
-    {
-        name: "Art & Craft",
-        url: "https://babybazarbd.com/product-category/arts-and-crafts/"
-    },
-    {
-        name: "Baby Care",
-        url: "https://babybazarbd.com/product-category/baby-care/"
-    },
-    {
-        name: "Feeding & Nursing",
-        url: "https://babybazarbd.com/product-category/feeding-and-nursing/"
-    },
-    {
-        name: "Moms Care",
-        url: "https://babybazarbd.com/product-category/moms-care/"
-    },
-    {
-        name: "Stationary",
-        url: "https://babybazarbd.com/product-category/school-essentials/stationary/"
-    }
+// ২. টার্গেট ক্যাটাগরি (বেইজ ইউআরএল)
+const targets = [
+    { category: "Toys & Gaming", url: "https://babybazarbd.com/product-category/toys/" },
+    { category: "Baby Care", url: "https://babybazarbd.com/product-category/baby-care/" },
+    { category: "Feeding", url: "https://babybazarbd.com/product-category/feeding-nursing/" },
+    { category: "Fashion", url: "https://babybazarbd.com/product-category/clothes-footwear/" },
+    { category: "Art & Craft", url: "https://babybazarbd.com/product-category/art-craft/" },
+    { category: "Food", url: "https://babybazarbd.com/product-category/baby-food/" },
+    { category: "Gear", url: "https://babybazarbd.com/product-category/gear-travel/" },
+    { category: "Maternity", url: "https://babybazarbd.com/product-category/moms-maternity/" }
 ];
 
-const scrapeAllCategories = async () => {
-    console.log("🚀 Starting Universal Scraper...");
-    
-    // ব্রাউজার লঞ্চ করা
-    const browser = await puppeteer.launch({ headless: "new" });
+const scrapeAndSave = async () => {
+    const browser = await puppeteer.launch({ 
+        headless: true, 
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+    }); 
     const page = await browser.newPage();
-    
-    // ব্রাউজারকে আসল মানুষের মতো দেখানো
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36');
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
 
-    let totalProductsCollected = 0;
-
-    // ৪. লুপ: প্রতিটি ক্যাটাগরি চেক করা
-    for (const category of CATEGORIES_TO_SCRAPE) {
-        console.log(`\n📂 Starting Category: ${category.name}`);
+    for (const target of targets) {
+        console.log(`\n=================================================`);
+        console.log(`🚀 Starting Category: ${target.category}`);
+        console.log(`=================================================`);
+        
         let pageNum = 1;
-        let hasMorePages = true;
+        let hasNextPage = true;
 
-        while (hasMorePages) {
-            // URL বানানো (Dynamic Pagination)
-            const url = `${category.url}page/${pageNum}/`;
-            console.log(`   📄 Scraping Page ${pageNum}...`);
+        // 🔥 PAGINATION LOOP: যতক্ষণ প্রোডাক্ট পাবে, ততক্ষণ লুপ চলবে
+        while (hasNextPage) {
+            // পেজ ১ হলে নরমাল URL, পেজ ২+ হলে 'page/X/' যোগ হবে
+            const pageUrl = pageNum === 1 ? target.url : `${target.url}page/${pageNum}/`;
+            
+            console.log(`\n📄 Scraping Page ${pageNum}... [${pageUrl}]`);
 
             try {
-                // পেজে যাওয়া (Time out বাড়ান হলো যাতে স্লো নেটে ক্র্যাশ না করে)
-                const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-
-                // যদি পেজ না থাকে (404 Error), লুপ বন্ধ করো
+                const response = await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+                
+                // যদি পেজ না থাকে (404), তাহলে লুপ ব্রেক
                 if (response.status() === 404) {
-                    console.log("   ⛔ End of pages reached (404).");
-                    hasMorePages = false;
+                    console.log("   ⛔ End of pages reached (404). Moving to next category.");
+                    hasNextPage = false;
                     break;
                 }
 
-                // ডাটা তোলা
-                const productsOnPage = await page.evaluate((catName) => {
-                    const items = [];
-                    // BabyBazar এর নির্দিষ্ট ক্লাস 'product-small'
-                    const cards = document.querySelectorAll('.product-small');
+                // লিংক সংগ্রহ করা
+                const productLinks = await page.evaluate(() => {
+                    let links = [];
+                    // Method 1
+                    const method1 = Array.from(document.querySelectorAll('.woocommerce-LoopProduct-link')).map(a => a.href);
+                    if (method1.length > 0) return method1;
+                    // Method 2
+                    const method2 = Array.from(document.querySelectorAll('.product a')).map(a => a.href);
+                    return [...new Set(method2)].filter(link => link.includes('/product/'));
+                });
 
-                    if (cards.length === 0) return []; // কোনো প্রোডাক্ট না পেলে খালি অ্যারে
-
-                    cards.forEach(card => {
-                        const nameEl = card.querySelector('.name');
-                        const name = nameEl ? nameEl.innerText.trim() : "Unknown";
-
-                        const priceEl = card.querySelector('.price .amount bdi');
-                        let price = 0;
-                        if (priceEl) {
-                            const priceText = priceEl.innerText.replace(/[^0-9.]/g, ''); 
-                            price = parseFloat(priceText);
-                        }
-
-                        // ইমেজ (Lazy load হ্যান্ডেল করা)
-                        const imgEl = card.querySelector('img');
-                        let image = "";
-                        if (imgEl) {
-                            image = imgEl.dataset.src || imgEl.src;
-                        }
-
-                        if (price > 0 && name !== "Unknown") {
-                            items.push({
-                                name,
-                                price,
-                                category: catName,
-                                image,
-                                sourceUrl: image,
-                                description: `Imported product for ${catName}`
-                            });
-                        }
-                    });
-                    return items;
-                }, category.name);
-
-                // যদি এই পেজে কোনো প্রোডাক্ট না পাওয়া যায়, তার মানে শেষ পেজ
-                if (productsOnPage.length === 0) {
-                    console.log("   ⛔ No products found on this page. Moving to next category.");
-                    hasMorePages = false;
+                if (productLinks.length === 0) {
+                    console.log("   ⛔ No products found on this page. Loop Finished.");
+                    hasNextPage = false;
                     break;
                 }
 
-                // ডাটাবেসে সেভ করা (প্রতি পেজ শেষেই সেভ হবে)
-                if (productsOnPage.length > 0) {
-                    await Product.insertMany(productsOnPage);
-                    console.log(`   ✅ Saved ${productsOnPage.length} products from page ${pageNum}`);
-                    totalProductsCollected += productsOnPage.length;
-                }
+                console.log(`   🔎 Found ${productLinks.length} products on Page ${pageNum}. Extracting...`);
 
-                pageNum++; // পরের পেজের জন্য রেডি
+                // প্রতি প্রোডাক্টের ডিটেইলস স্ক্র্যাপ করা
+                for (const link of productLinks) {
+                    try {
+                        await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 60000 });
+
+                        const productData = await page.evaluate((category) => {
+                            const nameEl = document.querySelector('h1.product_title');
+                            const name = nameEl ? nameEl.innerText.trim() : null;
+
+                            const priceEl = document.querySelector('.price .woocommerce-Price-amount bdi') || document.querySelector('.price');
+                            let price = 0;
+                            if (priceEl) {
+                                const priceText = priceEl.innerText.replace(/[^0-9.]/g, ''); 
+                                price = parseFloat(priceText);
+                            }
+
+                            const descEl = document.querySelector('.woocommerce-product-details__short-description') 
+                                        || document.querySelector('#tab-description')
+                                        || document.querySelector('.description');
+                            const description = descEl ? descEl.innerText.trim().slice(0, 600).replace(/\n/g, " ") : "Interactive baby product.";
+
+                            const imgEl = document.querySelector('.woocommerce-product-gallery__image img') 
+                                       || document.querySelector('.images img');
+                            const image = imgEl ? imgEl.src : '';
+
+                            return { name, price, category, description, image, qty: 20 };
+                        }, target.category);
+
+                        // ডাটা ভ্যালিডেশন ও সেভ
+                        if (productData.name && !productData.name.includes('%') && productData.price > 0) {
+                            const exists = await Product.findOne({ name: productData.name });
+                            if (!exists) {
+                                const newProduct = new Product({ ...productData, sourceUrl: link });
+                                await newProduct.save();
+                                console.log(`   ✅ Saved: ${productData.name.substring(0, 30)}...`);
+                            }
+                        }
+
+                    } catch (err) {
+                        // console.error(`Skipping link: ${link}`);
+                    }
+                }
+                
+                // সফল হলে পরের পেজে যাওয়ার প্রস্তুতি
+                pageNum++;
 
             } catch (error) {
-                console.log(`   ❌ Error on page ${pageNum}: ${error.message}`);
-                // এরর খেলেও আমরা থামব না, পরের ক্যাটাগরিতে যাওয়ার চেষ্টা করব
-                hasMorePages = false; 
+                console.log("   ❌ Error loading page (likely end of pagination).");
+                hasNextPage = false;
             }
         }
     }
 
-    console.log(`\n🎉 MISSION COMPLETE! Total Products Added: ${totalProductsCollected}`);
-    
+    console.log("\n🎉 ALL Categories Scraped Successfully!");
     await browser.close();
-    mongoose.connection.close();
+    process.exit();
 };
 
-// ** সতর্কতা: এটি আগের ডাটা মুছে দেবে না, নতুন ডাটা যোগ করবে **
-scrapeAllCategories();
+scrapeAndSave();
